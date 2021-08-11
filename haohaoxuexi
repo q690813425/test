@@ -1,2 +1,125 @@
-haohao
-haoha
+import com.igwfmc.bom.analysis.utils.AnalysisCollectionUtils;
+
+List<Map<String, String>> fundList = BuiltInMethods.getTaskData(data, "专户基金查询") as List<Map<String, String>>;
+List<Map<String, String>> taList = BuiltInMethods.getTaskData(data, "专户超额人数") as List<Map<String, String>>;
+
+
+//数据处理
+Map<String,Map<String, String>> assets = new HashMap<>()
+taList.each{
+	assets.put(it.get('fundCode'),it)
+}
+
+
+//在超过150、180、190时只提醒一次，一旦达到199时，则每日邮件提醒
+List<Map<String,String>> result1 = new ArrayList<>();//存放大于150小于180的结果
+List<Map<String,String>> result2 = new ArrayList<>();//存放大于180小于190的结果
+List<Map<String,String>> result3 = new ArrayList<>();//存放大于190小于199的结果
+List<Map<String,String>> result4 = new ArrayList<>();//存放大于199的结果
+String masterKey = 'eachData'
+fundList.each{
+	String fundCode = it.get('fundCode')
+	Map<String, String> asset = assets.get(fundCode)
+	if(asset != null){
+		String count = asset.get('count')
+		if(Integer.valueOf(count) >= 150 && Integer.valueOf(count) <180){
+			result1.add(asset)
+		}
+		if(Integer.valueOf(count) >= 180 && Integer.valueOf(count) <190){
+			result2.add(asset)
+		}
+		if(Integer.valueOf(count) >= 190 && Integer.valueOf(count) <199){
+			result3.add(asset)
+		}
+		if(Integer.valueOf(count) >= 199 ){
+			result4.add(asset)
+		}
+		
+	}
+}
+
+
+
+//只发送一次邮件
+String templateCode = 'MN_97923288'
+if(!result1.isEmpty() ){
+	String key = '150'
+	Object obj = api.getFromRedis(key)
+	Map<String,Object> map = new HashMap<>()
+	if(null == obj){
+	  map.put('warnData',result1)
+	  api.sendEmail(templateCode,map)
+	  
+	}else{
+		List<Map<String,String>> old = api.getFromRedis('masterKey')
+	    List<Map<String,String>> data = obj as List<Map<String, String>>
+	  //求新数据与redis里的数据的差集
+	  List<Map<String,String>> update = AnalysisCollectionUtils.getDifferenceSet(result1,data)
+	  
+	  result1.each{it ->
+		  
+		 old.each{ o ->
+		    if(it.get('fundCode') == o.get('fundCode')){
+				if(it.get('count') != o.get('count')){
+					 update.add(it)
+				}
+			}
+		 }  
+		  
+	  }
+	  
+	  if(!update.isEmpty()){
+	    map.put('warnData',update)
+		api.sendEmail(templateCode,map)
+	  }   
+	}
+	api.storeInRedis(key, result1, 2147483646)
+	
+}
+
+if( !result2.isEmpty() ){
+	String key = '180'
+	Object obj = api.getFromRedis(key)
+	if(null == obj){
+	  Map<String,Object> map = new HashMap<>()
+	  map.put('warnData',result2)
+	  api.sendEmail(templateCode,map)
+	  api.storeInRedis(key, 'notifyIn180', 2147483646)
+	}
+	
+	
+}
+
+if(!result3.isEmpty()){
+	String key = '190'
+	Object obj = api.getFromRedis(key)
+	if(null == obj){
+	  Map<String,Object> map = new HashMap<>()
+	  map.put('warnData',result3)
+	  api.sendEmail(templateCode,map)
+	  api.storeInRedis(key, 'notifyIn190', 2147483646)
+	}
+	
+}
+
+
+
+//每日发送邮件
+if(!result4.isEmpty()){
+  Map<String,Object> map = new HashMap<>()
+  map.put('warnData',result4)
+  api.sendEmail('MN_61234104',map)
+}
+
+List<Map<String,String>> result = new ArrayList<>()
+result.addAll(result1)
+result.addAll(result2)
+result.addAll(result3)
+result.addAll(result4)
+
+String[] name = ['fundCode','fundName','count']
+String[] chinese = ['基金代码','基金名称','持有人数']
+
+api.storeInRedis(masterKey, taList, 2147483646)
+api.nodeTrend(20, Status.SUCCESS, name, chinese, taList, 100)
+
